@@ -10,6 +10,9 @@ from qiskit_aer.noise import NoiseModel
 import matplotlib.pyplot as pyplot
 import numpy as np
 
+def keep_state(bitstring, qubits):
+    return all(bitstring[-(q+1)] == '0' for q in qubits)
+
 def create_ghz_state(size: int = 3):
     circuit = QuantumCircuit(size, size)
 
@@ -83,31 +86,46 @@ aer_ideal = AerSimulator()
 qc.save_statevector()
 statevector = aer_ideal.run(qc).result().get_statevector(qc)
 
-# print(statevector)
+print(statevector)
 
 prob_dict = Statevector(statevector).probabilities_dict()
 print("\nProbabilities:")
 print(prob_dict)
 
-# plot_histogram(prob_dict)
+plot_histogram(prob_dict)
 
 backend = GenericBackendV2(num_qubits=8)
 noise_model = NoiseModel.from_backend(backend)
 aer_noisy = AerSimulator(noise_model=noise_model)
 
-counts = aer_noisy.run(qc, shots=1000).result().get_counts()
-print("With noise:")
+counts = aer_noisy.run(qc, shots=10000).result().get_counts()
+print("\nWith noise:")
 print(counts)
 
-# plot_histogram(counts)
+plot_histogram(counts)
+
+check_qubits = [2, 4, 5]
+
+filtered_counts = {state: n for state, n in counts.items()
+                   if keep_state(state, check_qubits)}
+print("\nFiltered counts:", filtered_counts)
+
+# recalculate probabilities
+total = sum(filtered_counts.values())
+probs = {k: v/total for k, v in filtered_counts.items()}
+print("\nFiltered probabilities:", probs)
+
+plot_histogram(filtered_counts)
+
+
+pyplot.show()
+
 
 # TODO:
 # add error detection (detect invalid states)
 # get the ideal matrix (matrix of the ideal probabilities)
 # get the experimental matrix (create a matrix to compare against the ideal)
-# eqution 23 from ac/dc paper (measures fidelity)
+# equation 23 from ac/dc paper (measures fidelity)
 # simple truth table tomography (using |00>, |01>, |10>, and |11>)
 
 # fix the loop to work with an arbitrary amount of qubits
-
-pyplot.show()
