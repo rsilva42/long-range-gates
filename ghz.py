@@ -95,7 +95,7 @@ backend = GenericBackendV2(num_qubits=8)
 noise_model = NoiseModel.from_backend(backend)
 aer_noisy = AerSimulator(noise_model=noise_model)
 
-counts = aer_noisy.run(qc, shots=10000).result().get_counts()
+counts = aer_noisy.run(qc, shots=1000).result().get_counts()
 print("With noise:")
 print(counts)
 
