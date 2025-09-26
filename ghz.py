@@ -1,6 +1,6 @@
 from qiskit import QuantumCircuit
 from qiskit.circuit.classical import expr
-from qiskit.quantum_info import Statevector, DensityMatrix
+from qiskit.quantum_info import Statevector
 from qiskit.providers.fake_provider import GenericBackendV2
 from qiskit.visualization import plot_histogram, plot_state_city
 
@@ -15,24 +15,36 @@ def filter_states(counts, flag_qubits):
     return {state: n for state, n in counts.items()
             if all(state[-(q + 1)] == '0' for q in flag_qubits)}
 
+# compute the fidelity between a noisy and ideal results matrix
+def get_fidelity(noisy, ideal):
+    return np.trace((noisy.transpose() / np.sum(noisy)) @ ideal)
+
 # sums states depending on the first and last bit
 def condense_count(mat):
-    result = np.array([[0.0, 0.0], [0.0, 0.0]])
+    result = np.array([0.0, 0.0, 0.0, 0.0])
 
+    # note: bitstring is in reverse order (leftmost is highest qubit index)
     for bitstr in mat:
+        # if '00'
         if bitstr[0] == '0' and bitstr[-1] == '0':
-            result[0][0] += mat[bitstr]
-        elif bitstr[0] == '0' and bitstr[-1] == '1':
-            result[0][1] += mat[bitstr]
+            result[0] += mat[bitstr]
+        # if '01'
         elif bitstr[0] == '1' and bitstr[-1] == '0':
-            result[1][0] += mat[bitstr]
+            result[1] += mat[bitstr]
+        # if '10'
+        elif bitstr[0] == '0' and bitstr[-1] == '1':
+            result[2] += mat[bitstr]
+        # if '11'
         elif bitstr[0] == '1' and bitstr[-1] == '1':
-            result[1][1] += mat[bitstr]
+            result[3] += mat[bitstr]
 
     return result
 
+# get the ideal probabilities from a circuit with its state vector
 def get_ideal_prob(sim, qc):
-    return Statevector(sim.run(qc).result().get_statevector(qc)).probabilities_dict()
+    qc.save_statevector()
+    state_vector = sim.run(qc).result().get_statevector(qc)
+    return Statevector(state_vector).probabilities_dict()
 
 # creates a quantum circuit of input size which has a ghz state
 def create_ghz_state(size: int = 3):
@@ -93,145 +105,73 @@ def long_range_cnot(circuit: QuantumCircuit, control, target):
 ###############################################################################
 
 n = 8
-# qc = QuantumCircuit(n,n)
-qc00 = QuantumCircuit(n, n)
-qc01 = QuantumCircuit(n, n)
-qc10 = QuantumCircuit(n, n)
-qc11 = QuantumCircuit(n, n)
+qcs = [QuantumCircuit(n, n) for i in range(4)]
 
 # set circuit initial states
+# qcs[0] is already initialized to control: 0, target: 0
+# create control: 0, target: 1
+qcs[1].x(n - 1)
 
-qc01.x(n - 1)
+# create control: 1, target: 0
+qcs[2].x(0)
 
-qc10.x(0)
+# create control: 1, target: 1
+qcs[3].x(0)
+qcs[3].x(n - 1)
 
-qc11.x(0)
-qc11.x(n - 1)
+# apply protocol to each circuit
+for circuit in qcs:
+    long_range_cnot(circuit, 0, n - 1)
 
-# long_range_cnot(qc, 0, n - 1)
-long_range_cnot(qc00, 0, n - 1)
-long_range_cnot(qc01, 0, n - 1)
-long_range_cnot(qc10, 0, n - 1)
-long_range_cnot(qc11, 0, n - 1)
-
-# show circuit diagram
-# qc.draw("mpl") # Figure 1
-
-# prepare simulator
+# prepare simulator (with no noise)
 aer_ideal = AerSimulator()
 
-# ideal results
-# qc.save_statevector()
-qc00.save_statevector()
-qc01.save_statevector()
-qc10.save_statevector()
-qc11.save_statevector()
-
-# ideal_result = aer_ideal.run(qc).result()
-# statevector = ideal_result.get_statevector(qc)
-# ideal_prob = Statevector(statevector).probabilities_dict()
-ideal_prob00 = get_ideal_prob(aer_ideal, qc00)
-ideal_prob01 = get_ideal_prob(aer_ideal, qc01)
-ideal_prob10 = get_ideal_prob(aer_ideal, qc10)
-ideal_prob11 = get_ideal_prob(aer_ideal, qc11)
-
-
-# print("\nProbabilities:")
-# print({x: ideal_prob[x] for x, val in ideal_prob.items()})
-# plot_histogram(prob_dict) # Figure 2
-
-# ideal_mat = condense_count(ideal_prob)
-ideal_mat00 = condense_count(ideal_prob00)
-ideal_mat01 = condense_count(ideal_prob01)
-ideal_mat10 = condense_count(ideal_prob10)
-ideal_mat11 = condense_count(ideal_prob11)
+# get ideal probabilities and format them
+ideal_probs = [get_ideal_prob(aer_ideal, circuit) for circuit in qcs]
+ideal_matrix = np.array([condense_count(prob) for prob in ideal_probs])
 
 print("Ideal probabilities:")
-# print(ideal_mat)
-print(ideal_mat00)
-print(ideal_mat01)
-print(ideal_mat10)
-print(ideal_mat11)
-
-
-# measure our teleported CNOT control and target
-# qc.measure(0, 0)
-# qc.measure(7, 7)
-qc00.measure(0, 0)
-qc00.measure(7, 7)
-qc01.measure(0, 0)
-qc01.measure(7, 7)
-qc10.measure(0, 0)
-qc10.measure(7, 7)
-qc11.measure(0, 0)
-qc11.measure(7, 7)
+print(ideal_matrix)
 
 # noisy results
 backend = GenericBackendV2(num_qubits=8)
 noise_model = NoiseModel.from_backend(backend)
 aer_noisy = AerSimulator(noise_model=noise_model)
-
 shots = 1000
-# result = aer_noisy.run(qc, shots=1000).result()
-# counts = result.get_counts()
 
-counts00 = aer_noisy.run(qc00, shots=shots).result().get_counts()
-counts01 = aer_noisy.run(qc01, shots=shots).result().get_counts()
-counts10 = aer_noisy.run(qc10, shots=shots).result().get_counts()
-counts11 = aer_noisy.run(qc11, shots=shots).result().get_counts()
+# add a measure for target and control to get results
+for circuit in qcs:
+    circuit.measure(0, 0)
+    circuit.measure(n - 1, n - 1)
 
-# print("\nWith noise:")
-# print(counts)
-# plot_histogram(counts) # Figure 3
+# run each circuit and record the results
+counts = aer_noisy.run(qcs, shots=shots).result().get_counts()
 
 # discard if flag qubits are 1
 flag_qubits = [2, 4, 5]
 
-# filtered_counts = filter_states(counts, flag_qubits)
-filtered_counts00 = filter_states(counts00, flag_qubits)
-filtered_counts01 = filter_states(counts01, flag_qubits)
-filtered_counts10 = filter_states(counts10, flag_qubits)
-filtered_counts11 = filter_states(counts11, flag_qubits)
+# filter and condense the results of running the simulator
+noisy_matrix = np.array([condense_count(filter_states(count, flag_qubits)) for count in counts])
 
-# print("\nFiltered counts:")
-# print(filtered_counts)
-# plot_histogram(filtered_counts) # Figure 4
+print("\nNoisy shot counts:")
+print(noisy_matrix)
 
-# condense to only look at target and source end state
-# noisy_mat = condense_count(filtered_counts)
-noisy_mat00 = condense_count(filtered_counts00)
-noisy_mat01 = condense_count(filtered_counts01)
-noisy_mat10 = condense_count(filtered_counts10)
-noisy_mat11 = condense_count(filtered_counts11)
+# calculate the fidelity of our circuits
+fidelity = get_fidelity(noisy_matrix, ideal_matrix)
 
-# print(noisy_mat)
-print(noisy_mat00)
-print(noisy_mat01)
-print(noisy_mat10)
-print(noisy_mat11)
-
-
-# fidelity = np.trace(density.transpose() @ ideal_density)
-# fidelity = np.trace((noisy_mat.transpose() / np.sum(noisy_mat)) @ ideal_mat)
-fidelity00 = np.trace((noisy_mat00.transpose() / np.sum(noisy_mat00)) @ ideal_mat00)
-fidelity01 = np.trace((noisy_mat01.transpose() / np.sum(noisy_mat01)) @ ideal_mat01)
-fidelity10 = np.trace((noisy_mat10.transpose() / np.sum(noisy_mat10)) @ ideal_mat10)
-fidelity11 = np.trace((noisy_mat11.transpose() / np.sum(noisy_mat11)) @ ideal_mat11)
-
-# print("Fidelity: " + str(fidelity))
-print("Fidelity[00]: " + str(fidelity00))
-print("Fidelity[01]: " + str(fidelity01))
-print("Fidelity[10]: " + str(fidelity10))
-print("Fidelity[11]: " + str(fidelity11))
+print("\nFidelity: " + str(fidelity))
 
 pyplot.show()
 
 # TODO:
-# [DONE] add error detection (detect invalid states)
-# [DONE] get the ideal matrix (matrix of the ideal probabilities)
-# [DONE] get the experimental matrix (create a matrix to compare against the ideal)
-# [DONE] quation 23 from ac/dc paper (measures fidelity)
-# [DONE] simple truth table tomography (using |00>, |01>, |10>, and |11>)
+# [DONE] make quantum circuits a list (to iter instead of repeat)
+# [DONE] correct fidelity function OUTPUT ONE VALUE
+# [DONE] get dinner
+# [DONE] clean the code
 
-# make quantum circuits a list (to iter instead of repeat)
 # fix the loop to work with an arbitrary amount of qubits
+# find/create toy problems for mapping
+# create a pathfinding script which decides whether to go to the teleportation station or directly
+# decide how to split the work
+
+# figure out how to decide where to set up teleportation stations
